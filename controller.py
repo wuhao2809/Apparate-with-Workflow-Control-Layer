@@ -21,6 +21,7 @@ from utils import get_queuing_delay, get_ramp_latencies, get_remaining_rate
 from utils import serve_batch, tune_threshold, earlyexit_inference, get_optimal_exitable_ramps
 from utils import earlyexit_infer_per_sample, get_batch_perf, get_overall_exit_info, get_ramp_scores, get_ramp_utility
 from utils import ramp_addition, ramp_pruning, ramp_pruning_garbage_only, ramp_addition_tail_latency
+from workflow_controller import WorkflowController
 sys.path.insert(1, os.path.join(os.getcwd(), 'profiling'))  # for loading profile pickles
 # from profiler import TIDSProfiler
 
@@ -84,8 +85,10 @@ class Controller():
         # ch = logging.FileHandler(f"../logs/{args.model}_{args.dataset}.log", mode="w+")
         # ch.setFormatter(logging.Formatter(fmt=LOG_FORMAT, datefmt=DATE_FORMAT))
         # self._logger.addHandler(ch)
+        # Add suffix to log file to distinguish baseline vs optimized
+        workflow_suffix = "_workflow" if getattr(args, 'enable_workflow', False) else "_baseline"
         ch = logging.FileHandler(
-            f"./logs/output_{args.arch}_{args.dataset}.log", mode="w+")
+            f"./logs/output_{args.arch}_{args.dataset}{workflow_suffix}.log", mode="w+")
         ch.setFormatter(logging.Formatter(fmt=LOG_FORMAT, datefmt=DATE_FORMAT))
         self._logger.addHandler(ch)
         self._logger.debug(f"Logger set up!")
@@ -112,6 +115,20 @@ class Controller():
             global RAMP_CHECK_INTERVAL
             NUM_RAMP_BUDGET = 2
             RAMP_CHECK_INTERVAL = 100
+        
+        # Initialize workflow controller (can be disabled via args)
+        enable_workflow = getattr(args, 'enable_workflow', False)
+        enable_prioritization = not getattr(args, 'disable_prioritization', False)
+        enable_adaptive_batching = not getattr(args, 'disable_adaptive_batching', False)
+        enable_feedback = not getattr(args, 'disable_feedback', False)
+        
+        self._workflow_controller = WorkflowController(
+            enable_prioritization=enable_prioritization and enable_workflow,
+            enable_adaptive_batching=enable_adaptive_batching and enable_workflow,
+            enable_feedback=enable_feedback and enable_workflow
+        ) if enable_workflow else None
+        
+        self._slo_violations = []  # Track SLO violations for workflow monitoring
 
 
     def get_batch_decision(self):
@@ -725,6 +742,28 @@ class Controller():
                 
                 self._curr_ramp_acc = curr_ramp_acc
 
+                # Workflow control: Update queue state and apply feedback adjustments
+                if self._workflow_controller and not store_entropy_pickle:
+                    # Calculate queue metrics (simplified - in real system would track actual queue)
+                    # For simulation, we estimate based on batch processing
+                    estimated_queue_length = max(0, batch_size - len(sample_latencies))
+                    avg_wait_time = np.mean([l[0] for l in sample_latencies]) if sample_latencies else 0
+                    
+                    # Track SLO violations (requests that exceeded SLO)
+                    batch_slo_violations = sum(1 for l in sample_latencies 
+                                             if l[0] + l[1] > (self._args.slo if hasattr(self._args, 'slo') else 45))
+                    
+                    self._workflow_controller.update_queue_state(
+                        estimated_queue_length, avg_wait_time, batch_slo_violations)
+                    
+                    # Apply feedback-based threshold adjustments
+                    if i % 10 == 0:  # Apply feedback every 10 batches
+                        adjusted_thresholds = self._workflow_controller.adjust_thresholds_feedback(
+                            self._thresholds, self._ramp_ids)
+                        if adjusted_thresholds != self._thresholds:
+                            self._logger.info(f"Workflow feedback: adjusting thresholds from {self._thresholds} to {adjusted_thresholds}")
+                            self._thresholds = adjusted_thresholds
+
                 self._logger.info("serve_batch: batch {}, current bs {}, ramp_ids {}, thresholds {}, actual acc {}, latency_improvement {}, exit_rate {}, ramp acc {}"
                                   .format(i, batch_size, self._ramp_ids, self._thresholds, acc, latency_improvement if not self._recovery_mode else 0.0 , exit_rate, curr_ramp_acc))
 
@@ -759,12 +798,14 @@ class Controller():
         # print(np.array([l for l in all_serving_latencies]).mean())
         if self._args.batch_decision_path is not None:
             if not self._args.optimal_exiting:
+                # Add suffix to distinguish baseline vs optimized
+                workflow_suffix = "_workflow" if getattr(self._args, 'enable_workflow', False) else "_baseline"
                 if self.nlp:
-                    path = f"../apparate_latency/{self._args.arch}_{self._args.dataset}_azure.pickle"
+                    path = f"../apparate_latency/{self._args.arch}_{self._args.dataset}_azure{workflow_suffix}.pickle"
                     with open(path, "wb") as f:
                         pickle.dump(all_serving_latencies, f)
                 else:
-                    path = f"../apparate_latency/{self._args.arch}_{self._args.dataset}_{int(self._args.slo)}_fixed_{int(self._args.qps)}.pickle"
+                    path = f"../apparate_latency/{self._args.arch}_{self._args.dataset}_{int(self._args.slo)}_fixed_{int(self._args.qps)}{workflow_suffix}.pickle"
                     with open(path, "wb") as f:
                         pickle.dump(all_serving_latencies, f)
             else:
@@ -1274,6 +1315,14 @@ if __name__ == '__main__':
     parser.add_argument('--batch_decision_path', type=str,
                         default=None)
     parser.add_argument('--optimal_exiting', action='store_true')
+    parser.add_argument('--enable_workflow', action='store_true', default=False,
+                       help='Enable workflow control layer (default: False)')
+    parser.add_argument('--disable_prioritization', action='store_true', default=False,
+                       help='Disable SLO-aware request prioritization')
+    parser.add_argument('--disable_adaptive_batching', action='store_true', default=False,
+                       help='Disable confidence-aware adaptive batching')
+    parser.add_argument('--disable_feedback', action='store_true', default=False,
+                       help='Disable queue-aware feedback control')
     args, unknown = parser.parse_known_args()
     
     controller = Controller(args)

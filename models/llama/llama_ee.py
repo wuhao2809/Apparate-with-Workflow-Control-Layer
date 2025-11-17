@@ -27,7 +27,7 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 import torch.utils.checkpoint
-from llama_ee_utils import BetaMixture1D, get_skip_mask
+from .llama_ee_utils import BetaMixture1D, get_skip_mask
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.activations import ACT2FN

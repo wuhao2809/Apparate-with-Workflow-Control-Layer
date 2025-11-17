@@ -1759,3 +1759,115 @@ def find_universal_threshold(
         else:
             print(f"Threshold {threshold + step_size} will violate acc ({acc}), breaking at {threshold}")
             return threshold
+
+
+# ============================================================================
+# Workflow Control Layer Helper Functions
+# ============================================================================
+
+def predict_confidence_from_historical(historical_data: dict, ramp_ids: list, 
+                                       sample_indices: list) -> list:
+    """
+    Predict early exit confidence for samples based on historical data.
+    
+    Args:
+        historical_data: Dict with 'conf' key containing confidence at each ramp
+        ramp_ids: List of active ramp IDs
+        sample_indices: Indices of samples to predict for
+        
+    Returns:
+        List of predicted confidence scores (higher = more likely to exit early)
+    """
+    if not historical_data or 'conf' not in historical_data:
+        return [0.5] * len(sample_indices)
+    
+    predictions = []
+    for idx in sample_indices:
+        if ramp_ids and len(historical_data['conf']) > ramp_ids[0]:
+            if idx < len(historical_data['conf'][ramp_ids[0]]):
+                conf = historical_data['conf'][ramp_ids[0]][idx]
+                # Convert entropy to confidence (1 - entropy = confidence)
+                predictions.append(1.0 - conf if conf < 1.0 else 0.0)
+            else:
+                predictions.append(0.5)
+        else:
+            predictions.append(0.5)
+    
+    return predictions
+
+
+def calculate_queue_metrics(request_queue: list, current_time: float, 
+                          slo_violations: list = None) -> dict:
+    """
+    Calculate queue metrics for monitoring.
+    
+    Args:
+        request_queue: List of Request objects
+        current_time: Current timestamp in ms
+        slo_violations: List of request IDs that violated SLO
+        
+    Returns:
+        Dict with queue metrics
+    """
+    if not request_queue:
+        return {
+            'queue_length': 0,
+            'avg_wait_time': 0,
+            'max_wait_time': 0,
+            'slo_violation_count': 0,
+            'urgent_requests': 0  # Requests with < 20ms until deadline
+        }
+    
+    wait_times = [current_time - req.arrival_time for req in request_queue]
+    avg_wait_time = np.mean(wait_times) if wait_times else 0
+    max_wait_time = max(wait_times) if wait_times else 0
+    
+    # Count urgent requests (less than 20ms until deadline)
+    urgent_count = sum(1 for req in request_queue 
+                      if (req.deadline - current_time) < 20)
+    
+    slo_violation_count = len(slo_violations) if slo_violations else 0
+    
+    return {
+        'queue_length': len(request_queue),
+        'avg_wait_time': avg_wait_time,
+        'max_wait_time': max_wait_time,
+        'slo_violation_count': slo_violation_count,
+        'urgent_requests': urgent_count
+    }
+
+
+def get_adaptive_batch_size_simple(queue_length: int, 
+                                   avg_confidence: float = 0.5,
+                                   base_batch_size: int = 8,
+                                   min_batch_size: int = 1,
+                                   max_batch_size: int = 64) -> int:
+    """
+    Simple adaptive batch size calculation based on confidence.
+    
+    Args:
+        queue_length: Current queue length
+        avg_confidence: Average predicted confidence for early exit
+        base_batch_size: Base batch size
+        min_batch_size: Minimum batch size
+        max_batch_size: Maximum batch size
+        
+    Returns:
+        Adaptive batch size
+    """
+    if queue_length == 0:
+        return min_batch_size
+    
+    # Scale based on confidence
+    if avg_confidence > 0.8:
+        multiplier = 1.3
+    elif avg_confidence > 0.6:
+        multiplier = 1.1
+    elif avg_confidence < 0.3:
+        multiplier = 0.8
+    else:
+        multiplier = 1.0
+    
+    adaptive_size = int(base_batch_size * multiplier)
+    return max(min_batch_size, min(adaptive_size, queue_length, max_batch_size))
+

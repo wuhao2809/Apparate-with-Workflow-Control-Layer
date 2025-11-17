@@ -1,0 +1,33 @@
+# Apparate Requirements (GPU/CUDA)
+# For Mac M1, use requirements.txt instead
+
+# Core ML frameworks (CUDA 11.8)
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.0.1+cu118
+torchvision==0.15.2+cu118
+torchaudio==2.0.2+cu118
+
+# Transformers and NLP
+transformers==4.31.0
+tokenizers==0.13.3
+safetensors==0.3.2
+
+# Data processing
+numpy>=1.21.5
+pandas>=1.5.0
+scipy>=1.9.2
+scikit-learn>=1.1.2
+
+# Visualization
+matplotlib>=3.6.1
+
+# Utilities
+tqdm>=4.66.0
+pyyaml>=6.0
+requests>=2.28.1
+gdown>=4.7.1
+
+# Optional but recommended
+pillow>=9.2.0
+h5py>=3.7.0
+

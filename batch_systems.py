@@ -64,6 +64,27 @@ def set_seed(seed: int = 42):
     np.random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
 
+
+def prioritize_requests_by_slo(requests: list, current_time: float) -> list:
+    """
+    Prioritize requests by SLO urgency (most urgent first).
+    
+    Args:
+        requests: List of Request objects
+        current_time: Current timestamp in ms
+        
+    Returns:
+        Sorted list of requests (most urgent first)
+    """
+    if not requests:
+        return []
+    
+    # Sort by deadline (most urgent = smallest time until deadline)
+    def urgency_key(request):
+        return request.deadline - current_time
+    
+    return sorted(requests, key=urgency_key)
+
 # functions for parsing azure workload trace
 # AZURE_TRACE_DIR = "/home/ruipan/azure-functions"
 AZURE_TRACE_DIR = "/data2/ruipan/azure-functions"
@@ -215,6 +236,9 @@ def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.
                 break
 
         if batching_scheme == "clockwork":
+             # Prioritize incoming requests by SLO urgency (workflow control enhancement)
+            incoming_requests = prioritize_requests_by_slo(incoming_requests, curr_time)
+            
              # add every incoming requests to all batch queues
             for bs_idx, batch_queue in enumerate(batch_queues):
                 batch_queue += incoming_requests
@@ -225,6 +249,8 @@ def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.
                 batch_queues[bs_idx] = [r for r in batch_queue
                                 if not r.has_expired(serving_time=model_serving_time[bs_idx], current_time=curr_time)  # request has not expired
                                 and r.request_id > last_served_request_id]  # request has not been served in prior rounds
+                # Re-prioritize after dropping expired requests (workflow control)
+                batch_queues[bs_idx] = prioritize_requests_by_slo(batch_queues[bs_idx], curr_time)
                 request_ids_after_dropping = [r.request_id for r in batch_queues[bs_idx]]
                 dropped_requests = list(set(request_ids_before_dropping) - set(request_ids_after_dropping))
                 # last_dropped_request_id = max(last_dropped_request_id, max(dropped_requests) if dropped_requests != [] else -1)
