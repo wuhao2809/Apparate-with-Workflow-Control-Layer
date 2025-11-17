@@ -75,6 +75,8 @@ fix_tokenizers_install.sh
 *.md
 # But keep README.md
 !README.md
+# Exclude implementation plan (internal planning document)
+implementation_plan.md
 
 # Rust/Cargo (for tokenizers)
 target/
