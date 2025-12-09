@@ -1,0 +1,136 @@
+{
+  "test_type": "small_validation",
+  "results_directory": "workflow_results/exp-20251208_190638",
+  "total_experiments": 18,
+  "successful": 18,
+  "failed": 0,
+  "total_time": 543.4025506973267,
+  "results": [
+    {
+      "qps": 30,
+      "slo": 60,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 44.646090030670166
+    },
+    {
+      "qps": 30,
+      "slo": 60,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 46.142240047454834
+    },
+    {
+      "qps": 90,
+      "slo": 60,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 31.787292957305908
+    },
+    {
+      "qps": 90,
+      "slo": 60,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 30.762864112854004
+    },
+    {
+      "qps": 150,
+      "slo": 60,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 18.949422121047974
+    },
+    {
+      "qps": 150,
+      "slo": 60,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 19.65742802619934
+    },
+    {
+      "qps": 90,
+      "slo": 25,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 30.161924839019775
+    },
+    {
+      "qps": 90,
+      "slo": 25,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 28.347124099731445
+    },
+    {
+      "qps": 90,
+      "slo": 60,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 29.480670928955078
+    },
+    {
+      "qps": 90,
+      "slo": 60,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 32.06067991256714
+    },
+    {
+      "qps": 90,
+      "slo": 120,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 31.672687768936157
+    },
+    {
+      "qps": 90,
+      "slo": 120,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 31.27799391746521
+    },
+    {
+      "qps": 30,
+      "slo": 25,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 39.59034085273743
+    },
+    {
+      "qps": 30,
+      "slo": 25,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 42.46485996246338
+    },
+    {
+      "qps": 150,
+      "slo": 120,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 19.370966911315918
+    },
+    {
+      "qps": 150,
+      "slo": 120,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 20.38524603843689
+    },
+    {
+      "qps": 150,
+      "slo": 25,
+      "config": "baseline",
+      "success": true,
+      "elapsed_time": 23.690269947052002
+    },
+    {
+      "qps": 150,
+      "slo": 25,
+      "config": "optimized",
+      "success": true,
+      "elapsed_time": 22.954448223114014
+    }
+  ]
+}

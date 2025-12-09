@@ -20,6 +20,7 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+docs/
 
 # Virtual environments
 .env
@@ -61,7 +62,6 @@ Thumbs.db
 ../simulation_pickles/
 ../optimal_latency/
 ../profile_pickles_bs/
-workflow_results/
 logs/
 *.tar.gz
 

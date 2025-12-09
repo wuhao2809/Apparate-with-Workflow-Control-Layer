@@ -1,0 +1,18 @@
+{
+  "config_name": "optimized",
+  "dataset": "imdb",
+  "arch": "distilbert-base",
+  "enable_workflow": true,
+  "qps": 150,
+  "slo": 60,
+  "elapsed_time": 19.65742802619934,
+  "returncode": 0,
+  "stdout": "Warning: torch.cuda unavailable, profiling on CPUs!\nself._args.batch_decision_path: ../batch_decisions/clockwork_distilbert-base_60_azure_150.pickle\nself._latest_possible_ramp: 4\n[2]\n[(2.742724249296876, 0.12347806860448195), (5.071406385010265, 0.12347806860448195), (7.400088520723657, 0.12347806860448195), (9.728770656437042, 0.12347806860448195), (12.057452792150418, 0.12347806860448195), (14.386134927863825, 0.12347806860448195), (14.720144905481263, None)]\n",
+  "stderr": "/Users/haowu/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020\n  warnings.warn(\n",
+  "metrics": {
+    "overall_accuracy": 99.12187449941021,
+    "latency_improvement": 9.253807450319433,
+    "exit_rate": 0.16033435757037384,
+    "overall_ramp_accuracy": "{1: 0.9441078144588383, 2: 0.8970588235294118, 3: 0.9554744525547445, 5: 1.0}"
+  }
+}

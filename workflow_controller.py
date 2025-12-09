@@ -23,6 +23,9 @@ class RequestPrioritizer:
         """
         Sort requests by deadline urgency (most urgent first).
         
+        This sorts requests by time until deadline (deadline - current_time).
+        The request with the SMALLEST time until deadline is processed first.
+        
         Args:
             requests: List of Request objects with deadline attribute
             current_time: Current timestamp in ms
@@ -36,8 +39,7 @@ class RequestPrioritizer:
         # Calculate time until deadline for each request
         def urgency_score(request):
             time_until_deadline = request.deadline - current_time
-            # Negative so most urgent (smallest time) comes first
-            return -time_until_deadline
+            return time_until_deadline  # Smaller = more urgent
         
         sorted_requests = sorted(requests, key=urgency_score)
         return sorted_requests

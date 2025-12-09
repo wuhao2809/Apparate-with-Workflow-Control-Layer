@@ -69,6 +69,9 @@ def prioritize_requests_by_slo(requests: list, current_time: float) -> list:
     """
     Prioritize requests by SLO urgency (most urgent first).
     
+    This sorts requests by time until deadline (deadline - current_time).
+    The request with the SMALLEST time until deadline is processed first.
+    
     Args:
         requests: List of Request objects
         current_time: Current timestamp in ms
@@ -182,16 +185,143 @@ def create_request(fixed_arrival_rate, poisson_arrival, slo, qps):
             if arrivals_per_min[i] != 0: 
                 interarrival_time = INTERVAL_DURATION_SECONDS * 1000.0 / arrivals_per_min[i]  # fixed arrival interval within each minute in ms
                 for request_id in range(arrivals_per_min[i]):
-                    print(f"adding request with id {curr_request_id}, arrival_time {curr_time + interarrival_time * request_id}")
+                    # Reduced logging - only print for first few requests
+                    if curr_request_id < 10 or curr_request_id % 10000 == 0:
+                        print(f"[Batch Decision] Adding request {curr_request_id}, arrival_time {curr_time + interarrival_time * request_id}")
                     request = Request(curr_request_id, slo, arrival_time=curr_time + interarrival_time * request_id)
                     curr_request_id += 1
                     all_requests.append(request)
             curr_time += INTERVAL_DURATION_SECONDS * 1000
-        print(f"Total number of requests: {len(all_requests)}")
+        print(f"[Batch Decision] Total requests created: {len(all_requests)}")
         assert sum(arrivals_per_min) == len(all_requests)
     return all_requests, avg_qps, interarrival_time
 
-def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.0, max_batch_size=8, batch_timeout_ms=60, max_enqueued_batches=2):
+
+def create_mixed_slo_requests(num_requests, slo_distribution, qps, poisson_arrival=True, seed=2023):
+    """
+    Create requests with different SLOs based on a distribution.
+    
+    Args:
+        num_requests: Total number of requests to create
+        slo_distribution: Dict mapping SLO values to probabilities
+                         e.g., {30: 0.3, 45: 0.4, 60: 0.3}
+        qps: Average queries per second
+        poisson_arrival: Whether to use Poisson arrival pattern
+        seed: Random seed for reproducibility
+        
+    Returns:
+        all_requests: List of Request objects
+        avg_qps: Average QPS
+        interarrival_time: Average inter-arrival time
+    """
+    np.random.seed(seed)
+    random.seed(seed)
+    
+    all_requests = []
+    curr_request_id = 0
+    curr_time = 0.0
+    
+    # Normalize probabilities
+    slo_values = list(slo_distribution.keys())
+    slo_probs = list(slo_distribution.values())
+    total_prob = sum(slo_probs)
+    slo_probs = [p / total_prob for p in slo_probs]
+    
+    interarrival_time = 1000.0 / qps
+    
+    if poisson_arrival:
+        time_between_arrivals = np.random.exponential(
+            scale=interarrival_time, size=num_requests
+        )
+    
+    for i in range(num_requests):
+        # Sample SLO from distribution
+        slo = np.random.choice(slo_values, p=slo_probs)
+        
+        # Create request with this SLO
+        request = Request(curr_request_id, slo, arrival_time=curr_time)
+        all_requests.append(request)
+        
+        # Update time
+        if poisson_arrival:
+            delta_t = time_between_arrivals[i]
+        else:
+            delta_t = interarrival_time
+        curr_time += delta_t
+        curr_request_id += 1
+    
+    avg_qps = 1000 / interarrival_time
+    return all_requests, avg_qps, interarrival_time
+
+
+def create_time_varying_qps_requests(num_requests, qps_profile, slo, poisson_arrival=True, seed=2023):
+    """
+    Create requests with time-varying QPS.
+    
+    Args:
+        num_requests: Total number of requests (approximate, may vary with QPS profile)
+        qps_profile: List of tuples (start_time, end_time, qps) in seconds
+                     e.g., [(0, 10, 20), (10, 30, 50), (30, 50, 30)]
+        slo: SLO in ms (same for all requests)
+        poisson_arrival: Whether to use Poisson arrival pattern
+        seed: Random seed for reproducibility
+        
+    Returns:
+        all_requests: List of Request objects
+        avg_qps: Average QPS across all periods
+        interarrival_time: Average inter-arrival time
+    """
+    np.random.seed(seed)
+    random.seed(seed)
+    
+    all_requests = []
+    curr_request_id = 0
+    curr_time = 0.0  # in ms
+    
+    total_requests_created = 0
+    total_time_span = 0
+    
+    for start_sec, end_sec, qps in qps_profile:
+        duration_sec = end_sec - start_sec
+        duration_ms = duration_sec * 1000
+        start_time_ms = start_sec * 1000
+        
+        # Calculate number of requests for this period
+        expected_requests = int(duration_sec * qps)
+        
+        interarrival_time = 1000.0 / qps
+        
+        if poisson_arrival:
+            time_between_arrivals = np.random.exponential(
+                scale=interarrival_time, size=expected_requests
+            )
+        
+        period_time = start_time_ms
+        for i in range(expected_requests):
+            request = Request(curr_request_id, slo, arrival_time=period_time)
+            all_requests.append(request)
+            
+            if poisson_arrival:
+                delta_t = time_between_arrivals[i]
+            else:
+                delta_t = interarrival_time
+            period_time += delta_t
+            curr_request_id += 1
+            total_requests_created += 1
+        
+        total_time_span += duration_sec
+    
+    # Calculate average QPS
+    if total_time_span > 0:
+        avg_qps = total_requests_created / total_time_span
+    else:
+        avg_qps = qps_profile[0][2] if qps_profile else 30
+    
+    interarrival_time = 1000.0 / avg_qps
+    return all_requests, avg_qps, interarrival_time
+
+
+def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.0, max_batch_size=8, batch_timeout_ms=60, max_enqueued_batches=2, enable_prioritization=True, enable_adaptive_batching=False):
     round_id = 0
     curr_time = 0.0  # timestamp for emulating serving
     total_num_requests = len(all_requests)
@@ -232,12 +362,14 @@ def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.
         if curr_time > all_requests[-1].arrival_time:
             next_request_id = len(all_requests)
             if incoming_requests == []:
-                print("No more incoming requests")
+                # Reduced logging - no print needed
                 break
 
         if batching_scheme == "clockwork":
              # Prioritize incoming requests by SLO urgency (workflow control enhancement)
-            incoming_requests = prioritize_requests_by_slo(incoming_requests, curr_time)
+             # Only if prioritization is enabled
+            if enable_prioritization:
+                incoming_requests = prioritize_requests_by_slo(incoming_requests, curr_time)
             
              # add every incoming requests to all batch queues
             for bs_idx, batch_queue in enumerate(batch_queues):
@@ -250,15 +382,18 @@ def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.
                                 if not r.has_expired(serving_time=model_serving_time[bs_idx], current_time=curr_time)  # request has not expired
                                 and r.request_id > last_served_request_id]  # request has not been served in prior rounds
                 # Re-prioritize after dropping expired requests (workflow control)
-                batch_queues[bs_idx] = prioritize_requests_by_slo(batch_queues[bs_idx], curr_time)
+                # Only if prioritization is enabled
+                if enable_prioritization:
+                    batch_queues[bs_idx] = prioritize_requests_by_slo(batch_queues[bs_idx], curr_time)
                 request_ids_after_dropping = [r.request_id for r in batch_queues[bs_idx]]
                 dropped_requests = list(set(request_ids_before_dropping) - set(request_ids_after_dropping))
                 # last_dropped_request_id = max(last_dropped_request_id, max(dropped_requests) if dropped_requests != [] else -1)
                 # pprint(f"batch_queue {utils.supported_batch_sizes[bs_idx]}, remaining requests: {[r.request_id for r in batch_queues[bs_idx]]}")
             
             if all([q == [] for q in batch_queues]):  # no requests received, nothing to schedule, sleep for a while
-                print(f"no requests received, skipping to the next request")
-                print(f"curr_time {total_num_requests}, next_request_id {next_request_id}")
+                # Reduced logging - only print occasionally to avoid spam
+                if round_id % 1000 == 0:
+                    print(f"[Batch Decision] Round {round_id}: no requests, skipping to next request (next_id={next_request_id})")
                 if next_request_id < total_num_requests:
                     curr_time = all_requests[next_request_id].arrival_time
                 else:
@@ -282,10 +417,56 @@ def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.
                 ))
                     
             # pprint(f"strategy_queue before sorting: {strategy_queue}")
-            strategy_queue.sort(key=lambda x: x.deadline)
+            # Sorting is done conditionally based on adaptive batching (see below)
             # pprint(f"strategy_queue after sorting: {strategy_queue}")
 
             # iterate starting from the tightest deadline
+            # If adaptive batching is enabled, adjust batch size selection based on queue state
+            if enable_adaptive_batching:
+                # Enhanced adaptive batching: adjust batch size preferences based on queue load
+                # Count unique requests across all queues (each request appears in all queues)
+                # Use the maximum queue length as a proxy for load
+                max_queue_length = max(len(q) for q in batch_queues) if batch_queues else 0
+                
+                # More aggressive approach: adjust deadline calculation based on batch size preference
+                # This makes batch size matter even when deadlines differ
+                def adaptive_key(strategy):
+                    deadline = strategy.deadline
+                    batch_size = strategy.batch_size
+                    
+                    # High load: prefer larger batches (add deadline bonus for larger batches)
+                    if max_queue_length > 8:  # High load threshold
+                        # Give larger batches a deadline "bonus" (subtract from deadline to make them more attractive)
+                        # This makes larger batches more likely to be selected even with slightly later deadlines
+                        batch_bonus = (batch_size - 1) * 0.5  # Up to 3.5ms bonus for batch size 8
+                        adjusted_deadline = deadline - batch_bonus
+                        return (adjusted_deadline, -batch_size)  # Secondary: prefer larger when deadlines equal
+                    
+                    # Low load: prefer smaller batches (add deadline penalty for larger batches)
+                    elif max_queue_length < 5:  # Low load threshold
+                        # Give larger batches a deadline "penalty" (add to deadline to make them less attractive)
+                        # This makes smaller batches more likely to be selected
+                        batch_penalty = (batch_size - 1) * 0.3  # Up to 2.1ms penalty for batch size 8
+                        adjusted_deadline = deadline + batch_penalty
+                        return (adjusted_deadline, batch_size)  # Secondary: prefer smaller when deadlines equal
+                    
+                    # Medium load: prefer medium batches (4-8)
+                    else:
+                        # Penalize very small (1-2) and very large (16+) batches
+                        if batch_size <= 2:
+                            batch_penalty = 1.0  # 1ms penalty for very small batches
+                        elif batch_size >= 16:
+                            batch_penalty = 0.5  # 0.5ms penalty for very large batches
+                        else:
+                            batch_penalty = 0.0  # No penalty for medium batches
+                        adjusted_deadline = deadline + batch_penalty
+                        return (adjusted_deadline, batch_size)
+                
+                strategy_queue.sort(key=adaptive_key)
+            else:
+                # Standard sorting by deadline only
+                strategy_queue.sort(key=lambda x: x.deadline)
+            
             final_strategy = None
             for strategy in strategy_queue:
                 deadline = strategy.deadline
@@ -368,9 +549,8 @@ def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.
             batch_decision.append(utils.supported_batch_sizes[batch_idx])
         round_id += 1
 
-    print(len(per_request_stats), sum(batch_decision))
-    print("="*50)
-    print(f"Serving complete!")
+    # Reduced logging - only print summary
+    print(f"[Batch Decision] Complete: {len(per_request_stats)} requests, {sum(batch_decision)} total batch size")
 
     num_served_requests = sum([1 for s in per_request_stats if s is not None and s[0] + s[1] < slo])
     num_dropped_requests = sum([1 for s in per_request_stats if s is None])
@@ -381,13 +561,11 @@ def get_batch_decision(batching_scheme, all_requests, model_serving_time, slo=0.
     slo_violation_rate = num_slo_violations / total_num_requests * 100
     avg_bs = mean(batch_decision)
     bs_frequency = Counter(batch_decision)
-    print(f"Served: {num_served_requests} ({round(serve_rate, 3)}% of requests)")
-    print(f"Dropped: {num_dropped_requests} ({round(drop_rate, 3)}% of requests)")
-    print(f"SLO violations: {num_slo_violations} ({round(slo_violation_rate, 3)}% of requests)")
-    print(f"Avg batch size: {round(avg_bs, 5)}, bs frequency: {bs_frequency}")
-    print(f"Avg queueing delay: {round(np.average([s[0] for s in per_request_stats if s is not None and s[0] + s[1] < slo]), 3)}")
-    print(f"Avg inference time: {round(np.average([s[1] for s in per_request_stats if s is not None and s[0] + s[1] < slo]), 3)}")
-    print(f"Avg serving latency: {round(np.average([s[0] + s[1] for s in per_request_stats if s is not None and s[0] + s[1] < slo]), 3)}")
+    # Reduced logging - only print summary
+    print(f"[Batch Decision] Summary: Served={num_served_requests} ({round(serve_rate, 1)}%), "
+          f"Dropped={num_dropped_requests} ({round(drop_rate, 1)}%), "
+          f"Violations={num_slo_violations} ({round(slo_violation_rate, 1)}%), "
+          f"AvgBatchSize={round(avg_bs, 2)}")
     
     return max_batch_size, batch_timeout_ms, max_enqueued_batches, batch_decision, per_request_stats, total_num_requests, curr_time
 

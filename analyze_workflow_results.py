@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from collections import defaultdict
 import glob
+import ast
+import re
 
 
 def load_latency_data(pickle_path):
@@ -64,10 +66,53 @@ def parse_log_file(log_path):
                                 pass
                         if "overall exit rate" in part:
                             try:
-                                metrics["exit_rate"] = float(
-                                    part.split("overall exit rate")[1].split(",")[0].strip()
-                                )
-                            except:
+                                # Exit rate is a dictionary: {ramp_id: rate, ...}
+                                # The dictionary may span multiple comma-separated parts
+                                # Find the start position of "overall exit rate"
+                                start_idx = line.find("overall exit rate")
+                                if start_idx != -1:
+                                    # Extract substring starting from "overall exit rate"
+                                    exit_rate_substr = line[start_idx + len("overall exit rate"):].strip()
+                                    
+                                    # Find the matching closing brace
+                                    brace_count = 0
+                                    end_idx = -1
+                                    for i, char in enumerate(exit_rate_substr):
+                                        if char == '{':
+                                            brace_count += 1
+                                        elif char == '}':
+                                            brace_count -= 1
+                                            if brace_count == 0:
+                                                end_idx = i + 1
+                                                break
+                                    
+                                    if end_idx != -1:
+                                        exit_rate_str = exit_rate_substr[:end_idx]
+                                        
+                                        # Parse the dictionary - handle np.int64() format
+                                        # Replace np.int64(...) with just the number for easier parsing
+                                        exit_rate_str_clean = re.sub(r'np\.int64\((\d+)\)', r'\1', exit_rate_str)
+                                        
+                                        # Parse as dictionary
+                                        exit_rate_dict = ast.literal_eval(exit_rate_str_clean)
+                                        
+                                        # Calculate total early exit rate (sum of all except final exit)
+                                        # Final exit is typically the highest ramp_id (e.g., 5, or total_num_ramps - 1)
+                                        if isinstance(exit_rate_dict, dict):
+                                            # Get all ramp IDs
+                                            ramp_ids = sorted(exit_rate_dict.keys())
+                                            # Final exit is the last one
+                                            final_exit_id = ramp_ids[-1]
+                                            # Sum all early exits (excluding final)
+                                            total_early_exit_rate = sum(
+                                                exit_rate_dict[rid] for rid in ramp_ids if rid != final_exit_id
+                                            )
+                                            metrics["exit_rate"] = total_early_exit_rate
+                                        else:
+                                            # Fallback: if it's already a number somehow
+                                            metrics["exit_rate"] = float(exit_rate_dict)
+                            except Exception as e:
+                                print(f"Warning: Could not parse exit rate: {e}")
                                 pass
                         if "overall ramp accuracy" in part:
                             try:

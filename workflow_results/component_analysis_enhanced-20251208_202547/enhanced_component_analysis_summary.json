@@ -1,0 +1,83 @@
+{
+  "test_type": "enhanced_component_analysis",
+  "dataset": "imdb",
+  "arch": "distilbert-base",
+  "qps": 90,
+  "slo_distribution": {
+    "30": 0.3,
+    "60": 0.4,
+    "120": 0.3
+  },
+  "results_directory": "workflow_results/component_analysis_enhanced-20251208_202547",
+  "total_experiments": 8,
+  "successful": 8,
+  "failed": 0,
+  "total_time": 244.2208182811737,
+  "wall_clock_time": 258.12740302085876,
+  "results": [
+    {
+      "config_name": "baseline",
+      "prioritization": false,
+      "adaptive_batching": false,
+      "feedback": false,
+      "success": true,
+      "elapsed_time": 31.899029970169067
+    },
+    {
+      "config_name": "prioritization_only",
+      "prioritization": true,
+      "adaptive_batching": false,
+      "feedback": false,
+      "success": true,
+      "elapsed_time": 31.062681198120117
+    },
+    {
+      "config_name": "adaptive_batching_only",
+      "prioritization": false,
+      "adaptive_batching": true,
+      "feedback": false,
+      "success": true,
+      "elapsed_time": 31.914689779281616
+    },
+    {
+      "config_name": "feedback_only",
+      "prioritization": false,
+      "adaptive_batching": false,
+      "feedback": true,
+      "success": true,
+      "elapsed_time": 32.63339591026306
+    },
+    {
+      "config_name": "prioritization+batching",
+      "prioritization": true,
+      "adaptive_batching": true,
+      "feedback": false,
+      "success": true,
+      "elapsed_time": 29.711924076080322
+    },
+    {
+      "config_name": "prioritization+feedback",
+      "prioritization": true,
+      "adaptive_batching": false,
+      "feedback": true,
+      "success": true,
+      "elapsed_time": 29.763580799102783
+    },
+    {
+      "config_name": "batching+feedback",
+      "prioritization": false,
+      "adaptive_batching": true,
+      "feedback": true,
+      "success": true,
+      "elapsed_time": 28.351792335510254
+    },
+    {
+      "config_name": "all_features",
+      "prioritization": true,
+      "adaptive_batching": true,
+      "feedback": true,
+      "success": true,
+      "elapsed_time": 28.883724212646484
+    }
+  ]
+}
