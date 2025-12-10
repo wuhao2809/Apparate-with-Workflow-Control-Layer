@@ -129,17 +129,123 @@ def plot_slo_violations(results, output_dir):
     plt.close()
 
 
+def plot_verifiable_metrics(results, output_dir):
+    """
+    Plot verifiable metrics comparison for adaptive batching.
+    Focuses on metrics that are directly calculable and reliable.
+    """
+    adaptive_results = results.get('adaptive_batching', {})
+    if not adaptive_results:
+        print("Warning: No adaptive batching results found.")
+        return
+    
+    fixed_metrics = adaptive_results.get('fixed_batch', {}).get('metrics', {})
+    adaptive_metrics = adaptive_results.get('adaptive_batch', {}).get('metrics', {})
+    
+    if not fixed_metrics or not adaptive_metrics:
+        print("Warning: Missing metrics data.")
+        return
+    
+    # Create figure with 2 subplots side by side
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig.suptitle('Adaptive Batching: Verifiable Metrics Comparison', fontsize=16, fontweight='bold', y=0.995)
+    
+    # Plot 1: Throughput and Served Ratio
+    metrics_names = ['Throughput\n(req/s)', 'Served\nRatio (%)', 'SLO Compliance\n(%)']
+    fixed_values = [
+        fixed_metrics.get('throughput', 0),
+        fixed_metrics.get('served_ratio', 0),
+        fixed_metrics.get('slo_compliance_rate', 0)
+    ]
+    adaptive_values = [
+        adaptive_metrics.get('throughput', 0),
+        adaptive_metrics.get('served_ratio', 0),
+        adaptive_metrics.get('slo_compliance_rate', 0)
+    ]
+    
+    x = np.arange(len(metrics_names))
+    width = 0.35
+    
+    bars1 = ax1.bar(x - width/2, fixed_values, width, label='Fixed Batch', 
+                    color='#6C757D', alpha=0.8, edgecolor='black', linewidth=1.2)
+    bars2 = ax1.bar(x + width/2, adaptive_values, width, label='Adaptive Batching', 
+                    color='#A23B72', alpha=0.8, edgecolor='black', linewidth=1.2)
+    
+    # Add value labels
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{height:.1f}',
+                   ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
+    ax1.set_ylabel('Value', fontweight='bold')
+    ax1.set_title('(a) Throughput & Success Metrics', fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(metrics_names, rotation=0, ha='center')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3, axis='y')
+    ax1.set_axisbelow(True)
+    
+    # Plot 2: Wait Time Statistics
+    wait_metrics = ['Avg Wait\n(ms)', 'P50 Wait\n(ms)', 'P95 Wait\n(ms)']
+    fixed_wait = [
+        fixed_metrics.get('avg_wait_time', 0),
+        fixed_metrics.get('wait_time_p50', 0),
+        fixed_metrics.get('wait_time_p95', 0)
+    ]
+    adaptive_wait = [
+        adaptive_metrics.get('avg_wait_time', 0),
+        adaptive_metrics.get('wait_time_p50', 0),
+        adaptive_metrics.get('wait_time_p95', 0)
+    ]
+    
+    x2 = np.arange(len(wait_metrics))
+    bars3 = ax2.bar(x2 - width/2, fixed_wait, width, label='Fixed Batch', 
+                    color='#6C757D', alpha=0.8, edgecolor='black', linewidth=1.2)
+    bars4 = ax2.bar(x2 + width/2, adaptive_wait, width, label='Adaptive Batching', 
+                    color='#A23B72', alpha=0.8, edgecolor='black', linewidth=1.2)
+    
+    for bars in [bars3, bars4]:
+        for bar in bars:
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{height:.1f}',
+                   ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
+    ax2.set_ylabel('Wait Time (ms)', fontweight='bold')
+    ax2.set_title('(b) Wait Time Statistics', fontweight='bold')
+    ax2.set_xticks(x2)
+    ax2.set_xticklabels(wait_metrics, rotation=0, ha='center')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis='y')
+    ax2.set_axisbelow(True)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    output_path = os.path.join(output_dir, "adaptive_batching_verifiable_metrics.pdf")
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {output_path}")
+    
+    plt.close()
+
+
 def plot_queue_length_over_time(queue_data, output_dir):
     """
-    Plot 2: Queue Length Over Time
-    Shows how adaptive batching keeps queue stable under variable load.
+    Plot 2: Queue Length Over Time (Approximate - for visualization only)
+    Note: Queue length is reconstructed and may have inaccuracies.
     """
     if queue_data is None:
         print("Warning: No queue data found. Skipping queue length plot.")
         return
     
-    fixed_queue = queue_data['fixed_batch']['queue_lengths']
-    adaptive_queue = queue_data['adaptive_batch']['queue_lengths']
+    fixed_queue = queue_data['fixed_batch'].get('queue_lengths', [])
+    adaptive_queue = queue_data['adaptive_batch'].get('queue_lengths', [])
+    
+    if not fixed_queue or not adaptive_queue:
+        print("Warning: Queue length data is empty.")
+        return
     
     # Use actual time steps if available, otherwise estimate
     if 'time_steps' in queue_data['fixed_batch'] and queue_data['fixed_batch']['time_steps']:
@@ -165,31 +271,22 @@ def plot_queue_length_over_time(queue_data, output_dir):
             color='#A23B72', linewidth=2, alpha=0.8)
     
     # Add shaded regions for load phases
-    # Low load: 0-20s, High load: 20-40s, Low load: 40-60s
-    ax.axvspan(0, 20, alpha=0.1, color='green', label='Low Load (QPS 30)')
-    ax.axvspan(20, 40, alpha=0.1, color='red', label='High Load (QPS 150)')
-    ax.axvspan(40, 60, alpha=0.1, color='green')
+    ax.axvspan(0, 15, alpha=0.1, color='green', label='Low Load (QPS 50)')
+    ax.axvspan(15, 35, alpha=0.1, color='red', label='High Load (QPS 250)')
+    ax.axvspan(35, 50, alpha=0.1, color='green')
     
     ax.set_xlabel('Time (seconds)', fontweight='bold')
-    ax.set_ylabel('Queue Length (requests)', fontweight='bold')
-    ax.set_title('Adaptive Batching: Queue Stability Under Variable Load', fontweight='bold', pad=15)
+    ax.set_ylabel('Queue Length (requests, approximate)', fontweight='bold')
+    ax.set_title('Adaptive Batching: Queue Length Over Time (Approximate)', fontweight='bold', pad=15)
     ax.legend(loc='upper left', frameon=True, fancybox=True, shadow=True)
     ax.grid(True, alpha=0.3)
     ax.set_axisbelow(True)
     
-    # Add statistics text - moved down to avoid overlap with legend
-    fixed_avg = np.mean(fixed_queue)
-    fixed_max = np.max(fixed_queue)
-    adaptive_avg = np.mean(adaptive_queue)
-    adaptive_max = np.max(adaptive_queue)
-    
-    stats_text = f'Fixed Batch: Avg={fixed_avg:.1f}, Max={fixed_max}\n'
-    stats_text += f'Adaptive: Avg={adaptive_avg:.1f}, Max={adaptive_max}'
-    
-    ax.text(0.02, 0.75, stats_text,
-            transform=ax.transAxes, ha='left', va='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
-            fontsize=10, fontweight='bold', family='monospace')
+    # Add note about approximation
+    ax.text(0.98, 0.02, 'Note: Queue length is reconstructed and approximate',
+            transform=ax.transAxes, ha='right', va='bottom',
+            fontsize=9, style='italic', alpha=0.7,
+            bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.3))
     
     plt.tight_layout()
     
@@ -296,7 +393,7 @@ def main():
     
     # Generate plots
     plot_slo_violations(results, output_dir)
-    plot_queue_length_over_time(queue_data, output_dir)
+    plot_verifiable_metrics(results, output_dir)  # Focus on verifiable metrics
     create_combined_summary_plot(results, queue_data, output_dir)
     
     print("\n" + "="*70)

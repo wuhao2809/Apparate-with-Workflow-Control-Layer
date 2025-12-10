@@ -422,9 +422,12 @@ def test_adaptive_batching():
         'total_time': total_time_fixed,
         'metrics': fixed_metrics
     }
-    print(f"  Avg Queue Length: {fixed_metrics['avg_queue_length']:.2f}")
-    print(f"  Max Queue Length: {fixed_metrics['max_queue_length']}")
     print(f"  Throughput: {fixed_metrics['throughput']:.2f} req/s")
+    print(f"  Served: {fixed_metrics['served_requests']} ({fixed_metrics['served_ratio']:.1f}%)")
+    print(f"  Dropped: {fixed_metrics['dropped_requests']} ({fixed_metrics['dropped_ratio']:.1f}%)")
+    print(f"  Avg Wait Time: {fixed_metrics['avg_wait_time']:.2f}ms (p95: {fixed_metrics['wait_time_p95']:.2f}ms)")
+    print(f"  Avg Batch Size: {fixed_metrics['avg_batch_size']:.2f}")
+    print(f"  SLO Compliance: {fixed_metrics['slo_compliance_rate']:.1f}%")
     
     # Test 2b: Adaptive Batching
     print("\n[2b] Running Adaptive Batching...")
@@ -479,9 +482,12 @@ def test_adaptive_batching():
         'total_time': total_time_adaptive,
         'metrics': adaptive_metrics
     }
-    print(f"  Avg Queue Length: {adaptive_metrics['avg_queue_length']:.2f}")
-    print(f"  Max Queue Length: {adaptive_metrics['max_queue_length']}")
     print(f"  Throughput: {adaptive_metrics['throughput']:.2f} req/s")
+    print(f"  Served: {adaptive_metrics['served_requests']} ({adaptive_metrics['served_ratio']:.1f}%)")
+    print(f"  Dropped: {adaptive_metrics['dropped_requests']} ({adaptive_metrics['dropped_ratio']:.1f}%)")
+    print(f"  Avg Wait Time: {adaptive_metrics['avg_wait_time']:.2f}ms (p95: {adaptive_metrics['wait_time_p95']:.2f}ms)")
+    print(f"  Avg Batch Size: {adaptive_metrics['avg_batch_size']:.2f}")
+    print(f"  SLO Compliance: {adaptive_metrics['slo_compliance_rate']:.1f}%")
     
     return results
 
@@ -559,19 +565,37 @@ def analyze_slo_violations(per_request_stats, all_requests, slo_distribution):
     return metrics
 
 
-def analyze_queue_behavior(batch_decision, per_request_stats, all_requests, total_time):
-    """Analyze queue behavior over time by tracking actual queue state during serving."""
-    # Build a timeline of queue events
-    events = []  # (time, delta) where delta is +1 (arrival) or -batch_size (served)
+def analyze_verifiable_metrics(batch_decision, per_request_stats, all_requests, total_time, slo=None):
+    """
+    Analyze verifiable metrics that can be directly calculated from batch decision results.
+    These metrics are reliable and don't require queue state reconstruction.
     
-    # Add arrival events
-    for request in all_requests:
-        events.append((request.arrival_time, 1, 'arrival'))
+    Returns:
+        dict with verifiable metrics:
+        - throughput: served requests per second
+        - served_ratio: percentage of requests successfully served
+        - dropped_ratio: percentage of requests dropped (expired)
+        - avg_wait_time: average queue delay for served requests
+        - avg_total_latency: average total latency (queue + inference)
+        - slo_compliance_rate: percentage of served requests that met SLO
+        - batch_size_stats: statistics about batch sizes used
+        - wait_time_percentiles: p50, p95, p99 wait times
+    """
+    from collections import Counter
     
-    # Reconstruct serving times from batch decision and per_request_stats
-    # We'll estimate serving times based on when requests complete
-    serving_events = []
-    batch_idx = 0
+    # Basic counts
+    total_requests = len(all_requests)
+    served_requests = sum(1 for s in per_request_stats if s is not None)
+    dropped_requests = total_requests - served_requests
+    
+    # Throughput (reliable: served / time)
+    throughput = (served_requests / (total_time / 1000.0)) if total_time > 0 else 0.0
+    
+    # Wait times and latencies (reliable: from per_request_stats)
+    wait_times = []
+    total_latencies = []
+    slo_compliant = 0
+    
     for request_id, request in enumerate(all_requests):
         if request_id >= len(per_request_stats):
             continue
@@ -580,65 +604,81 @@ def analyze_queue_behavior(batch_decision, per_request_stats, all_requests, tota
             continue  # Dropped request
         
         queue_delay, inference_time = stats
-        serving_time = request.arrival_time + queue_delay
+        wait_times.append(queue_delay)
+        total_latency = queue_delay + inference_time
+        total_latencies.append(total_latency)
         
-        # Group into batches (simplified - assume consecutive served requests are in same batch)
-        if batch_idx < len(batch_decision):
-            batch_size = batch_decision[batch_idx]
-            # Only add serving event once per batch
-            if request_id % batch_size == 0 or batch_idx == 0:
-                serving_events.append((serving_time, -batch_size, 'serve'))
-                batch_idx += 1
+        # Check SLO compliance
+        request_slo = slo if slo else request.slo
+        if total_latency <= request_slo:
+            slo_compliant += 1
     
-    # Combine and sort all events
-    all_events = events + serving_events
-    all_events.sort(key=lambda x: x[0])
+    # Calculate statistics
+    avg_wait_time = float(np.mean(wait_times)) if wait_times else 0.0
+    avg_total_latency = float(np.mean(total_latencies)) if total_latencies else 0.0
     
-    # Simulate queue over time
-    current_queue = 0
-    sample_interval = 50.0  # Sample every 50ms for better resolution
-    max_time = max([e[0] for e in all_events]) if all_events else total_time
-    max_time = min(max_time, 60000)  # Cap at 60 seconds
+    # Percentiles
+    wait_time_p50 = float(np.percentile(wait_times, 50)) if wait_times else 0.0
+    wait_time_p95 = float(np.percentile(wait_times, 95)) if wait_times else 0.0
+    wait_time_p99 = float(np.percentile(wait_times, 99)) if wait_times else 0.0
     
-    queue_lengths = []
-    time_steps = []
-    event_idx = 0
+    # Batch size statistics (reliable: from batch_decision)
+    batch_size_counter = Counter(batch_decision)
+    avg_batch_size = float(np.mean(batch_decision)) if batch_decision else 0.0
+    median_batch_size = float(np.median(batch_decision)) if batch_decision else 0.0
+    max_batch_size = int(max(batch_decision)) if batch_decision else 0
+    min_batch_size = int(min(batch_decision)) if batch_decision else 0
+    batch_size_distribution = {int(k): int(v) for k, v in batch_size_counter.items()}
     
-    for t in np.arange(0, max_time, sample_interval):
-        # Process all events up to this time
-        while event_idx < len(all_events) and all_events[event_idx][0] <= t:
-            _, delta, _ = all_events[event_idx]
-            current_queue = max(0, current_queue + delta)
-            event_idx += 1
-        
-        queue_lengths.append(current_queue)
-        time_steps.append(t)
-    
-    # Calculate metrics
-    served_requests = sum(1 for s in per_request_stats if s is not None)
-    throughput = (served_requests / (total_time / 1000.0)) if total_time > 0 else 0
-    
-    # Convert numpy types to native Python types for JSON serialization
-    queue_lengths_clean = [int(x) for x in queue_lengths] if queue_lengths else []
-    time_steps_clean = [float(x) for x in time_steps] if time_steps else []
-    
-    # Calculate queue length during high-load period (15-35s for QPS spike)
-    high_load_indices = [i for i, t in enumerate(time_steps) if 15000 <= t <= 35000]
-    high_load_queue_lengths = [queue_lengths[i] for i in high_load_indices] if high_load_indices else []
-    avg_queue_high_load = float(np.mean(high_load_queue_lengths)) if high_load_queue_lengths else 0.0
-    max_queue_high_load = int(max(high_load_queue_lengths)) if high_load_queue_lengths else 0
+    # SLO compliance rate
+    slo_compliance_rate = (slo_compliant / served_requests * 100.0) if served_requests > 0 else 0.0
     
     metrics = {
-        'queue_lengths': queue_lengths_clean,
-        'time_steps': time_steps_clean,  # Add time steps for better plotting
-        'avg_queue_length': float(np.mean(queue_lengths)) if queue_lengths else 0.0,
-        'max_queue_length': int(max(queue_lengths)) if queue_lengths else 0,
-        'avg_queue_high_load': avg_queue_high_load,
-        'max_queue_high_load': max_queue_high_load,
-        'throughput': float(throughput),
+        # Basic counts (100% reliable)
+        'total_requests': int(total_requests),
         'served_requests': int(served_requests),
-        'total_time': float(total_time)
+        'dropped_requests': int(dropped_requests),
+        'served_ratio': float(served_requests / total_requests * 100.0) if total_requests > 0 else 0.0,
+        'dropped_ratio': float(dropped_requests / total_requests * 100.0) if total_requests > 0 else 0.0,
+        
+        # Throughput (reliable: direct calculation)
+        'throughput': float(throughput),
+        'total_time': float(total_time),
+        
+        # Wait time statistics (reliable: from per_request_stats)
+        'avg_wait_time': avg_wait_time,
+        'wait_time_p50': wait_time_p50,
+        'wait_time_p95': wait_time_p95,
+        'wait_time_p99': wait_time_p99,
+        'max_wait_time': float(max(wait_times)) if wait_times else 0.0,
+        
+        # Latency statistics (reliable: from per_request_stats)
+        'avg_total_latency': avg_total_latency,
+        'avg_inference_time': float(np.mean([s[1] for s in per_request_stats if s is not None])) if served_requests > 0 else 0.0,
+        
+        # SLO compliance (reliable: direct comparison)
+        'slo_compliance_rate': slo_compliance_rate,
+        'slo_compliant_requests': int(slo_compliant),
+        
+        # Batch size statistics (reliable: from batch_decision)
+        'avg_batch_size': avg_batch_size,
+        'median_batch_size': median_batch_size,
+        'max_batch_size': max_batch_size,
+        'min_batch_size': min_batch_size,
+        'batch_size_distribution': batch_size_distribution,
+        'total_batches': int(len(batch_decision)),
     }
+    
+    return metrics
+
+
+def analyze_queue_behavior(batch_decision, per_request_stats, all_requests, total_time):
+    """Analyze queue behavior - focuses on verifiable metrics only."""
+    # Calculate verifiable metrics
+    slo = all_requests[0].slo if all_requests else None
+    metrics = analyze_verifiable_metrics(
+        batch_decision, per_request_stats, all_requests, total_time, slo
+    )
     
     return metrics
 
@@ -705,10 +745,32 @@ def main():
     print(f"  Improvement: {prioritization_results['baseline']['metrics']['overall_violation_rate'] - prioritization_results['prioritization']['metrics']['overall_violation_rate']:.2f}% reduction")
     
     print("\nAdaptive Batching Test:")
-    print(f"  Fixed Batch - Avg Queue Length: {adaptive_batching_results['fixed_batch']['metrics']['avg_queue_length']:.2f}")
-    print(f"  Adaptive Batch - Avg Queue Length: {adaptive_batching_results['adaptive_batch']['metrics']['avg_queue_length']:.2f}")
-    print(f"  Fixed Batch - Throughput: {adaptive_batching_results['fixed_batch']['metrics']['throughput']:.2f} req/s")
-    print(f"  Adaptive Batch - Throughput: {adaptive_batching_results['adaptive_batch']['metrics']['throughput']:.2f} req/s")
+    fixed_metrics = adaptive_batching_results['fixed_batch']['metrics']
+    adaptive_metrics = adaptive_batching_results['adaptive_batch']['metrics']
+    
+    print(f"  Fixed Batch:")
+    print(f"    Throughput: {fixed_metrics['throughput']:.2f} req/s")
+    print(f"    Served: {fixed_metrics['served_ratio']:.1f}% | Dropped: {fixed_metrics['dropped_ratio']:.1f}%")
+    print(f"    Avg Wait Time: {fixed_metrics['avg_wait_time']:.2f}ms (p95: {fixed_metrics['wait_time_p95']:.2f}ms)")
+    print(f"    Avg Batch Size: {fixed_metrics['avg_batch_size']:.2f}")
+    print(f"    SLO Compliance: {fixed_metrics['slo_compliance_rate']:.1f}%")
+    
+    print(f"  Adaptive Batch:")
+    print(f"    Throughput: {adaptive_metrics['throughput']:.2f} req/s")
+    print(f"    Served: {adaptive_metrics['served_ratio']:.1f}% | Dropped: {adaptive_metrics['dropped_ratio']:.1f}%")
+    print(f"    Avg Wait Time: {adaptive_metrics['avg_wait_time']:.2f}ms (p95: {adaptive_metrics['wait_time_p95']:.2f}ms)")
+    print(f"    Avg Batch Size: {adaptive_metrics['avg_batch_size']:.2f}")
+    print(f"    SLO Compliance: {adaptive_metrics['slo_compliance_rate']:.1f}%")
+    
+    # Calculate improvements
+    throughput_improvement = ((adaptive_metrics['throughput'] - fixed_metrics['throughput']) / fixed_metrics['throughput'] * 100) if fixed_metrics['throughput'] > 0 else 0
+    wait_improvement = ((fixed_metrics['avg_wait_time'] - adaptive_metrics['avg_wait_time']) / fixed_metrics['avg_wait_time'] * 100) if fixed_metrics['avg_wait_time'] > 0 else 0
+    compliance_improvement = ((adaptive_metrics['slo_compliance_rate'] - fixed_metrics['slo_compliance_rate']) / fixed_metrics['slo_compliance_rate'] * 100) if fixed_metrics['slo_compliance_rate'] > 0 else 0
+    
+    print(f"  Improvements:")
+    print(f"    Throughput: {throughput_improvement:+.1f}%")
+    print(f"    Wait Time: {wait_improvement:+.1f}% reduction")
+    print(f"    SLO Compliance: {compliance_improvement:+.1f}%")
     
     # Save queue length data for plotting
     queue_data = {
